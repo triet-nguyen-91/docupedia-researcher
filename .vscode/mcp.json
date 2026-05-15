@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "docupedia": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}
