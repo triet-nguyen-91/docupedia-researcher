@@ -1,0 +1,10 @@
+# Optional Chat UI dependencies
+# Install with: pip install -r requirements-chat.txt
+# (Only needed if you want the Chainlit browser-based chat UI)
+#
+# Prerequisite: Ollama must be installed separately — https://ollama.com
+# Then pull a model: ollama pull llama3.2
+# And start the server: ollama serve
+
+chainlit>=2.0.0
+ollama>=0.4.0

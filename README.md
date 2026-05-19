@@ -263,32 +263,88 @@ The agent answers **only** from crawled Docupedia content and always cites page 
 
 ---
 
-## Quick-start Checklist
+## Optional: Chat UI (Chainlit + Ollama)
 
-- [ ] Virtual environment activated (`.venv\Scripts\Activate.ps1`)
-- [ ] PX Proxy is running on `http://127.0.0.1:3128`
-- [ ] Dependencies installed: `python -m pip install --proxy http://127.0.0.1:3128 -r requirements.txt`
-- [ ] `.env` created and populated with `DOCUPEDIA_PAT`, `DOCUPEDIA_BASE_URL`, `SPACE_KEY`
-- [ ] Pipeline run at least once: `python pipeline.py run`
-- [ ] Reload VS Code — MCP server starts automatically, `@Docupedia` agent is ready
+The default way to query the knowledge base is via the **GitHub Copilot `@Docupedia` agent** (see above). No extra setup is needed for that.
 
----
+If you want a **standalone browser-based chat UI** instead, you can use the optional Chainlit + Ollama integration. This is completely independent of VS Code and GitHub Copilot.
 
-## Configuration Reference (`config.py`)
+### How it works
 
-| Variable | Default | Description |
-|---|---|---|
-| `DOCUPEDIA_PAT` | *(required)* | Personal Access Token — Bearer token on all API requests |
-| `DOCUPEDIA_BASE_URL` | *(required)* | Base URL of the Confluence instance (no trailing slash) |
-| `SPACE_KEY` | *(required)* | Confluence space key to crawl |
-| `MAX_PAGES` | `0` (all) | Max pages to crawl; `0` = no limit; override via `--limit` flag |
-| `REQUEST_RETRIES` | `3` | HTTP retry attempts on transient failures |
-| `REQUEST_TIMEOUT` | `30` | HTTP request timeout in seconds |
-| `REQUEST_DELAY` | `0.2` | Seconds between API batch requests; increase if you hit rate-limit errors |
-| `CRAWL_BATCH_SIZE` | `100` | Pages per Confluence API request (max 100); larger = fewer round-trips |
-| `CRAWL_WORKERS` | `4` | Parallel worker threads for per-page processing; tune to cores/network speed |
-| `EMBEDDING_MODEL` | `intfloat/multilingual-e5-base` | HuggingFace model ID **or** local directory path (relative to project root) — use a local path for offline machines |
-| `EMBEDDING_DIMENSION` | `768` | Output vector dimension |
-| `CHUNK_SIZE` | `512` | Token size per text chunk |
-| `CHUNK_OVERLAP` | `64` | Token overlap between adjacent chunks |
-| `CHROMA_COLLECTION_NAME` | `docupedia` | ChromaDB collection name |
+```
+User question (browser)
+        │
+        ▼
+  chat_ui/app.py  ─── embed query ──▶  ChromaDB (same data as Copilot agent)
+        │                                     │
+        │            top-K chunks ◀───────────┘
+        ▼
+  Ollama (local LLM — e.g. llama3.2)
+        │
+        ▼
+  Streamed answer + source citations (browser)
+```
+
+### Prerequisites
+0. **Install Ollama cli**:
+
+   ```powershell
+   irm https://ollama.com/install.ps1 | iex
+   ```
+
+1. **Ollama** — install from [https://ollama.com](https://ollama.com) and pull a model:
+
+   ```powershell
+   # Pull a model (once, ~2–4 GB depending on model)
+   ollama pull llama3.2
+   ```
+
+2. Run the main pipeline at least once so ChromaDB is populated:
+
+   ```powershell
+   python pipeline.py run
+   ```
+
+### Install Chat UI dependencies
+
+```powershell
+python -m pip install -r requirements-chat.txt
+# or with PX Proxy:
+python -m pip install --proxy http://127.0.0.1:3128 -r requirements-chat.txt
+```
+
+### Configure (optional)
+
+Add these lines to your `.env` (sensible defaults are already set):
+
+```env
+OLLAMA_MODEL=llama3.2          # any model you pulled with `ollama pull`
+OLLAMA_BASE_URL=http://localhost:11434
+CHAT_TOP_K=6                   # final chunks sent to the model
+CHAT_SEARCH_K=14               # fetch more candidates, then rerank and deduplicate
+CHAT_MAX_CONTEXT_CHARS=7000    # cap prompt size so the model stays focused
+CHAT_MAX_HISTORY_TURNS=2       # helps follow-up questions without bloating context
+CHAT_MAX_CHUNKS_PER_PAGE=2     # avoid overloading the prompt with one page only
+OLLAMA_TEMPERATURE=0.1         # lower = more factual / less chatty
+OLLAMA_NUM_CTX=8192            # larger context window for retrieved chunks
+```
+
+Recommended quality-first settings:
+
+- Use a stronger model than `llama3.2` when possible. Good local options are `qwen2.5:7b`, `qwen3:8b`, or `llama3.1:8b` if your machine can handle them.
+- Keep `OLLAMA_TEMPERATURE` low for RAG. Higher temperature makes local models sound fluent, but usually hurts factual accuracy.
+- Increase `CHAT_SEARCH_K` before increasing `CHAT_TOP_K`. It is usually better to fetch more candidates and rerank them than to dump many raw chunks straight into the prompt.
+
+### Start the Chat UI
+
+```powershell
+# Terminal 1 — Ollama server (keep running)
+ollama serve
+
+# Terminal 2 — Chainlit UI
+chainlit run chat_ui/app.py
+```
+
+Open [http://localhost:8000](http://localhost:8000) in your browser.
+
+> **Note:** The Chat UI and the GitHub Copilot agent share the same ChromaDB vector store. There is no need to re-embed if you have already run `python pipeline.py embed`.
