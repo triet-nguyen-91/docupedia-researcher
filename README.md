@@ -156,6 +156,28 @@ MAX_PAGES=0
 
 > The PAT is sent as a `Bearer` token automatically. No login function needed.
 
+### 5. (Optional) Download the embedding model for offline use
+
+By default, `sentence-transformers` downloads `intfloat/multilingual-e5-base` (~280 MB) from HuggingFace on the first `embed` run. On machines with **no internet access**, this fails and the embed step crashes.
+
+**On the machine with internet access**, run the download helper once:
+
+```powershell
+python scripts/download_model.py
+```
+
+This saves the model to `data/models/multilingual-e5-base/`.
+
+**Copy the project** (including `data/models/`) to the offline laptop, then add this line to `.env` on that machine:
+
+```env
+EMBEDDING_MODEL=data/models/multilingual-e5-base
+```
+
+`config.py` detects the local directory automatically and loads the model from disk — no network calls are made.
+
+> `data/` is in `.gitignore`, so the model folder is never committed to git. Copy it manually or via a shared network drive.
+
 ---
 
 ## Running the Pipeline
@@ -263,7 +285,7 @@ The agent answers **only** from crawled Docupedia content and always cites page 
 | `REQUEST_RETRIES` | `3` | HTTP retry attempts on transient failures |
 | `REQUEST_TIMEOUT` | `30` | HTTP request timeout in seconds |
 | `REQUEST_DELAY` | `0.5` | Base delay between requests (seconds) |
-| `EMBEDDING_MODEL` | `intfloat/multilingual-e5-base` | Sentence-transformer model (768-dim, cross-lingual) |
+| `EMBEDDING_MODEL` | `intfloat/multilingual-e5-base` | HuggingFace model ID **or** local directory path (relative to project root) — use a local path for offline machines |
 | `EMBEDDING_DIMENSION` | `768` | Output vector dimension |
 | `CHUNK_SIZE` | `512` | Token size per text chunk |
 | `CHUNK_OVERLAP` | `64` | Token overlap between adjacent chunks |

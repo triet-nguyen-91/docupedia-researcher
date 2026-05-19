@@ -50,7 +50,13 @@ REQUEST_DELAY: float = 0.5
 # ---------------------------------------------------------------------------
 # Embedding settings
 # ---------------------------------------------------------------------------
-EMBEDDING_MODEL: str = "intfloat/multilingual-e5-base"
+# EMBEDDING_MODEL can be a HuggingFace model ID (requires internet on first run)
+# or a local directory path relative to PROJECT_ROOT (for offline machines).
+# Example .env entry for offline use: EMBEDDING_MODEL=data/models/multilingual-e5-base
+_model_env: str = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base").strip()
+# Resolve to an absolute path when the value points to an existing local directory.
+_model_local = PROJECT_ROOT / _model_env
+EMBEDDING_MODEL: str = str(_model_local) if _model_local.is_dir() else _model_env
 EMBEDDING_DIMENSION: int = 768
 CHROMA_COLLECTION_NAME: str = "docupedia"
 
