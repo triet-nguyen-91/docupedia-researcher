@@ -61,38 +61,50 @@ logger = logging.getLogger("pipeline")
 # Step 1: Crawl
 # ---------------------------------------------------------------------------
 
-def run_crawl(limit: int = 0) -> None:
+def run_crawl(limit: int = 0, page_id: int | None = None) -> None:
     """
     Full crawl pipeline per page:
-      1. Fetch all pages from Confluence space (HTML body included in batch response)
+      1. Fetch pages — either the full space (default) or a root page + all
+         its descendants when page_id is given (via PAGE_ID env var or --page-id).
       2. Download all attachments and rewrite HTML URLs to local file paths
-      3. Save offline HTML  → data/raw_html/<pageid>.html  (raw data)
+      3. Save offline HTML  → data/raw_html/<SPACE_KEY>/<pageid>.html
       4. Parse offline HTML → structured sections dict
-      5. Save JSON          → data/raw/<pageid>.json
-      6. Write Markdown     → docupedia_data_page/<pageid>_<title>.md
+      5. Save JSON          → data/raw/<SPACE_KEY>/<pageid>_<title>.json
+      6. Write Markdown     → data/docupedia_data_page/<SPACE_KEY>/<pageid>_<title>.md
 
     Resume-safe: pages whose JSON already exists are skipped.
 
     Args:
-        limit: Max pages to crawl (0 = use MAX_PAGES from .env; 0 = all).
+        limit:   Max pages to crawl (0 = use MAX_PAGES from .env; 0 = all).
+        page_id: Root page ID to crawl (None = crawl entire space).
     """
     if limit > 0:
         config.MAX_PAGES = limit
 
+    # Resolve which page_id to use: CLI arg > .env PAGE_ID > None (full space)
+    root_page_id: int | None = page_id or config.PAGE_ID
+
     logger.info("=== STEP 1: CRAWL ===")
     logger.info(f"Base URL     : {config.DOCUPEDIA_BASE_URL}")
     logger.info(f"Space Key    : {config.SPACE_KEY}")
+    if root_page_id:
+        logger.info(f"Root Page ID : {root_page_id} (subtree crawl)")
+    else:
+        logger.info(f"Scope        : full space")
     logger.info(f"MAX_PAGES    : {config.MAX_PAGES if config.MAX_PAGES > 0 else 'unlimited'}")
     logger.info(f"Raw HTML out : {config.RAW_HTML_DIR}")
     logger.info(f"JSON out     : {config.RAW_DIR}")
     logger.info(f"Markdown out : {config.PAGES_MD_DIR}")
 
-    # PAT authentication is automatic — token is set on the session at construction.
     client = ConfluenceClient()
 
     logger.info("Fetching page list from Confluence...")
-    all_pages = list(client.iter_all_pages())
-    logger.info(f"Total pages to crawl: {len(all_pages)}")
+    if root_page_id:
+        all_pages = list(client.iter_pages_from_root(root_page_id))
+        logger.info(f"Pages found under root {root_page_id}: {len(all_pages)}")
+    else:
+        all_pages = list(client.iter_all_pages())
+        logger.info(f"Total pages to crawl: {len(all_pages)}")
 
     success = 0
     failed = 0
@@ -203,50 +215,50 @@ def main() -> None:
         description="Docupedia RAG Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Ví dụ:
-  python pipeline.py crawl               # Crawl toàn bộ → JSON + Markdown
-  python pipeline.py crawl --limit 5    # Test với 5 trang
-  python pipeline.py embed               # Embed JSON → ChromaDB
-  python pipeline.py run                 # Crawl + Embed (toàn bộ pipeline)
+Examples:
+  python pipeline.py crawl                        # Crawl entire space
+  python pipeline.py crawl --limit 5             # Test with 5 pages
+  python pipeline.py crawl --page-id 2155921768  # Crawl a page subtree
+  python pipeline.py embed                        # Embed JSON → ChromaDB
+  python pipeline.py run                          # Crawl + Embed (full pipeline)
+  python pipeline.py run --page-id 2155921768    # Subtree crawl + embed
 """,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # ── crawl ──────────────────────────────────────────────────────────────
-    crawl_parser = subparsers.add_parser(
-        "crawl", help="Crawl Docupedia → lưu raw JSON + Markdown"
+    crawl_parser = subparsers.add_parser("crawl", help="Crawl Confluence space or page subtree")
+    crawl_parser.add_argument(
+        "--limit", type=int, default=0,
+        help="Max pages to crawl (0 = no limit / use MAX_PAGES from .env)",
     )
     crawl_parser.add_argument(
-        "--limit",
-        type=int,
-        default=0,
-        help="Giới hạn số trang (0 = dùng MAX_PAGES từ .env, 0 nghĩa là toàn bộ)",
+        "--page-id", type=int, default=None, dest="page_id",
+        help="Root page ID — crawl this page and all its sub-pages (overrides PAGE_ID in .env)",
     )
 
     # ── embed ──────────────────────────────────────────────────────────────
-    subparsers.add_parser(
-        "embed", help="Đọc JSON đã crawl, embed và lưu vào ChromaDB"
-    )
+    subparsers.add_parser("embed", help="Chunk + embed saved JSON into ChromaDB")
 
     # ── run (all) ──────────────────────────────────────────────────────────
-    run_parser = subparsers.add_parser(
-        "run", help="Chạy toàn bộ pipeline: crawl → embed"
+    run_parser = subparsers.add_parser("run", help="Full pipeline: crawl → embed")
+    run_parser.add_argument(
+        "--limit", type=int, default=0,
+        help="Max pages to crawl (0 = no limit)",
     )
     run_parser.add_argument(
-        "--limit",
-        type=int,
-        default=0,
-        help="Giới hạn số trang khi crawl (0 = toàn bộ)",
+        "--page-id", type=int, default=None, dest="page_id",
+        help="Root page ID — crawl this page and all its sub-pages (overrides PAGE_ID in .env)",
     )
 
     args = parser.parse_args()
 
     if args.command == "crawl":
-        run_crawl(limit=args.limit)
+        run_crawl(limit=args.limit, page_id=args.page_id)
     elif args.command == "embed":
         run_embed()
     elif args.command == "run":
-        run_crawl(limit=getattr(args, "limit", 0))
+        run_crawl(limit=getattr(args, "limit", 0), page_id=getattr(args, "page_id", None))
         run_embed()
 
 

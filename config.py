@@ -19,6 +19,12 @@ DOCUPEDIA_PAT: str = os.environ["DOCUPEDIA_PAT"]
 DOCUPEDIA_BASE_URL: str = os.environ["DOCUPEDIA_BASE_URL"].rstrip("/")
 SPACE_KEY: str = os.environ["SPACE_KEY"]
 
+# Optional: crawl from a specific root page and all its descendants.
+# Set to a Confluence page ID (integer string) to crawl that subtree only.
+# Leave empty to crawl the entire space.
+_page_id_raw: str = os.getenv("PAGE_ID", "").strip()
+PAGE_ID: int | None = int(_page_id_raw) if _page_id_raw else None
+
 # ---------------------------------------------------------------------------
 # Paths — all crawl output is scoped under data/<type>/<SPACE_KEY>/
 # CHROMA_DIR is shared across all spaces (one searchable vector store).

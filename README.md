@@ -119,13 +119,18 @@ python -m venv .venv
 
 ### 2. Start PX Proxy
 
-Make sure **PX Proxy** is running on `http://127.0.0.1:3128` before installing dependencies or running the pipeline.
+Make sure **PX Proxy** is running on `http://127.0.0.1:3128` before running the pipeline if you are inside the corporate network.
 
 ### 3. Install dependencies
 
 ```powershell
-python -m pip install --proxy http://127.0.0.1:3128 -r requirements.txt
+python -m pip install -r requirements.txt
 ```
+
+> **Corporate network (PX Proxy):** If direct internet access is blocked, start PX Proxy first and install via:
+> ```powershell
+> python -m pip install --proxy http://127.0.0.1:3128 -r requirements.txt
+> ```
 
 ### 4. Configure environment variables
 
@@ -175,6 +180,27 @@ python pipeline.py crawl --limit 5
 ```
 
 > `embed` is idempotent — re-running it updates existing chunks in place, no duplicates.
+
+### Crawl a specific page and all its sub-pages
+
+Instead of crawling the entire space, you can target a single root page by ID. The pipeline will crawl that page and every descendant recursively.
+
+**Option A — via `.env`** (persists across runs):
+```env
+PAGE_ID=2155921768
+```
+Then run normally:
+```powershell
+python pipeline.py run
+```
+
+**Option B — via CLI argument** (one-off, overrides `.env`):
+```powershell
+python pipeline.py crawl --page-id 2155921768
+python pipeline.py run   --page-id 2155921768   # crawl subtree + embed
+```
+
+Leave `PAGE_ID` empty (or unset) to crawl the entire space as usual.
 
 ### Crawling multiple Confluence spaces
 
