@@ -23,7 +23,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import random
 import time
 from typing import Iterator
 
@@ -88,7 +87,7 @@ class ConfluenceClient:
         Respects config.MAX_PAGES (0 = unlimited).
         """
         start = 0
-        batch_size = 20
+        batch_size = config.CRAWL_BATCH_SIZE
         total_yielded = 0
 
         while True:
@@ -124,10 +123,7 @@ class ConfluenceClient:
 
             start += batch_size
 
-            # Random delay between batches (mirrors POC pattern)
-            delay = random.uniform(1.0, 3.0)
-            logger.debug(f"Batch done, sleeping {delay:.2f}s before next batch.")
-            time.sleep(delay)
+            time.sleep(config.REQUEST_DELAY)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -192,17 +188,50 @@ class ConfluenceClient:
             f"Failed to fetch pages at start={start} after {config.REQUEST_RETRIES} retries."
         )
 
+    def _iter_by_cql(self, cql: str, expand: str) -> Iterator[dict]:
+        """
+        Stream all pages matching a CQL expression via
+        /rest/api/content/search, using start/limit pagination.
+        """
+        url = f"{config.DOCUPEDIA_BASE_URL}/rest/api/content/search"
+        start = 0
+        batch_size = config.CRAWL_BATCH_SIZE
+        while True:
+            try:
+                resp = self.confluence.session.get(
+                    url,
+                    params={
+                        "cql": cql,
+                        "start": start,
+                        "limit": batch_size,
+                        "expand": expand,
+                    },
+                    timeout=config.REQUEST_TIMEOUT,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                raise RuntimeError(f"CQL search failed at start={start}: {exc}") from exc
+
+            results = data.get("results", [])
+            yield from results
+
+            if len(results) < batch_size:
+                break
+            start += batch_size
+            time.sleep(config.REQUEST_DELAY)
+
     def iter_pages_from_root(self, root_page_id: int) -> Iterator[dict]:
         """
         Yield the root page and all its descendants.
 
-        Step 1: fetch the root page via get_page_by_id (full content).
-        Step 2: page through the entire space using get_all_pages_from_space
-                with ancestors expanded (same proven API as iter_all_pages).
-                Filter in Python: keep pages whose ancestor chain contains
-                root_page_id. No separate child/descendant endpoint needed.
+        Fast path (CQL): uses ancestor=<id> query against
+        /rest/api/content/search — only fetches the subtree, not the whole
+        space.
 
-        This avoids both 401 issues and 500 errors from unsupported endpoints.
+        Fallback: if CQL returns an error, scans all space pages with
+        ancestors expanded and filters in Python.
+
         Respects config.MAX_PAGES (0 = unlimited).
         """
         total_yielded = 0
@@ -236,36 +265,57 @@ class ConfluenceClient:
         if config.MAX_PAGES > 0 and total_yielded >= config.MAX_PAGES:
             return
 
-        # ── Step 2: scan all space pages, keep descendants ───────────────
-        logger.info(f"Scanning space for descendants of page {root_page_id}...")
-        start = 0
-        batch_size = 20
+        # ── Step 2: descendants — CQL fast path, ancestor scan fallback ──
+        cql = f'ancestor={root_page_id} AND space="{config.SPACE_KEY}"'
+        expand = "body.view,version,metadata.labels"
+        use_cql = False
 
-        while True:
-            pages = self._fetch_batch_with_ancestors(start, batch_size)
-            if not pages:
-                break
+        try:
+            probe = self.confluence.session.get(
+                f"{config.DOCUPEDIA_BASE_URL}/rest/api/content/search",
+                params={"cql": cql, "start": 0, "limit": 1},
+                timeout=config.REQUEST_TIMEOUT,
+            )
+            probe.raise_for_status()
+            use_cql = True
+            logger.info("CQL search supported — fetching descendants via CQL.")
+        except Exception as exc:
+            logger.warning(
+                f"CQL not available ({exc}), falling back to full-space ancestor scan."
+            )
 
-            for page in pages:
-                page_id = int(page["id"])
-                if page_id == root_page_id:
-                    continue  # already yielded above
-
-                ancestor_ids = {int(a["id"]) for a in page.get("ancestors", [])}
-                if root_page_id not in ancestor_ids:
-                    continue  # not in this subtree
-
+        if use_cql:
+            for page in self._iter_by_cql(cql, expand):
+                if int(page["id"]) == root_page_id:
+                    continue
                 yield _to_page_dict(page)
                 total_yielded += 1
                 if config.MAX_PAGES > 0 and total_yielded >= config.MAX_PAGES:
                     logger.info(f"Reached MAX_PAGES={config.MAX_PAGES}. Stopping.")
                     return
-
-            if len(pages) < batch_size:
-                break
-
-            start += batch_size
-            delay = random.uniform(1.0, 3.0)
-            logger.debug(f"Batch done, sleeping {delay:.2f}s before next batch.")
-            time.sleep(delay)
+        else:
+            # Ancestor scan fallback: fetch all space pages with ancestors
+            # expanded, filter in Python for descendants of root_page_id.
+            logger.info(f"Scanning space for descendants of page {root_page_id}...")
+            start = 0
+            batch_size = config.CRAWL_BATCH_SIZE
+            while True:
+                pages = self._fetch_batch_with_ancestors(start, batch_size)
+                if not pages:
+                    break
+                for page in pages:
+                    if int(page["id"]) == root_page_id:
+                        continue
+                    ancestor_ids = {int(a["id"]) for a in page.get("ancestors", [])}
+                    if root_page_id not in ancestor_ids:
+                        continue
+                    yield _to_page_dict(page)
+                    total_yielded += 1
+                    if config.MAX_PAGES > 0 and total_yielded >= config.MAX_PAGES:
+                        logger.info(f"Reached MAX_PAGES={config.MAX_PAGES}. Stopping.")
+                        return
+                if len(pages) < batch_size:
+                    break
+                start += batch_size
+                time.sleep(config.REQUEST_DELAY)
 

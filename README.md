@@ -284,7 +284,9 @@ The agent answers **only** from crawled Docupedia content and always cites page 
 | `MAX_PAGES` | `0` (all) | Max pages to crawl; `0` = no limit; override via `--limit` flag |
 | `REQUEST_RETRIES` | `3` | HTTP retry attempts on transient failures |
 | `REQUEST_TIMEOUT` | `30` | HTTP request timeout in seconds |
-| `REQUEST_DELAY` | `0.5` | Base delay between requests (seconds) |
+| `REQUEST_DELAY` | `0.2` | Seconds between API batch requests; increase if you hit rate-limit errors |
+| `CRAWL_BATCH_SIZE` | `100` | Pages per Confluence API request (max 100); larger = fewer round-trips |
+| `CRAWL_WORKERS` | `4` | Parallel worker threads for per-page processing; tune to cores/network speed |
 | `EMBEDDING_MODEL` | `intfloat/multilingual-e5-base` | HuggingFace model ID **or** local directory path (relative to project root) — use a local path for offline machines |
 | `EMBEDDING_DIMENSION` | `768` | Output vector dimension |
 | `CHUNK_SIZE` | `512` | Token size per text chunk |

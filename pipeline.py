@@ -25,7 +25,9 @@ import json
 import logging
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Lock
 
 from tqdm import tqdm
 
@@ -92,69 +94,99 @@ def run_crawl(limit: int = 0, page_id: int | None = None) -> None:
     else:
         logger.info(f"Scope        : full space")
     logger.info(f"MAX_PAGES    : {config.MAX_PAGES if config.MAX_PAGES > 0 else 'unlimited'}")
+    logger.info(f"Workers      : {config.CRAWL_WORKERS}")
+    logger.info(f"Batch size   : {config.CRAWL_BATCH_SIZE}")
     logger.info(f"Raw HTML out : {config.RAW_HTML_DIR}")
     logger.info(f"JSON out     : {config.RAW_DIR}")
     logger.info(f"Markdown out : {config.PAGES_MD_DIR}")
 
     client = ConfluenceClient()
 
-    logger.info("Fetching page list from Confluence...")
-    if root_page_id:
-        all_pages = list(client.iter_pages_from_root(root_page_id))
-        logger.info(f"Pages found under root {root_page_id}: {len(all_pages)}")
-    else:
-        all_pages = list(client.iter_all_pages())
-        logger.info(f"Total pages to crawl: {len(all_pages)}")
+    # Thread-safe counters (mutate dict in place — no nonlocal needed)
+    _lock = Lock()
+    _stats = {"success": 0, "failed": 0, "skipped": 0}
 
-    success = 0
-    failed = 0
-    skipped = 0
-
-    for page_meta in tqdm(all_pages, desc="Crawling", unit="page"):
-        page_id = page_meta["pageid"]
+    def _process_page(page_meta: dict) -> str:
+        """Download images, parse, save JSON + Markdown for one page."""
+        pid = page_meta["pageid"]
         title = page_meta["title"]
-        raw_output_path = config.RAW_DIR / f"{page_id}_{_safe_title(title)}.json"
+        raw_output_path = config.RAW_DIR / f"{pid}_{_safe_title(title)}.json"
 
+        # Delta check: skip only if the page is unchanged since the last crawl
         if raw_output_path.exists():
-            logger.debug(f"Skip (already done): {title}")
-            skipped += 1
-            continue
+            try:
+                with open(raw_output_path, encoding="utf-8") as f:
+                    stored = json.load(f)
+                if stored.get("last_modified") == page_meta.get("last_modified"):
+                    with _lock:
+                        _stats["skipped"] += 1
+                    return "skip"
+            except Exception:
+                pass  # corrupted JSON or missing key — re-crawl
 
         try:
             raw_html: str = page_meta["html"]
 
             # ── Download attachments + rewrite HTML URLs to local paths ──
-            offline_html, image_results = download_page_images(client, page_id, raw_html)
+            offline_html, image_results = download_page_images(client, pid, raw_html)
 
-            # ── Save raw offline HTML ─────────────────────────────────────
-            raw_html_path = config.RAW_HTML_DIR / f"{page_id}.html"
+            raw_html_path = config.RAW_HTML_DIR / f"{pid}.html"
             raw_html_path.write_text(offline_html, encoding="utf-8")
 
-            # ── Parse offline HTML → sections ─────────────────────────────
             page_for_parse = {**page_meta, "html": offline_html}
             parsed_page = parse_page(page_for_parse)
             parsed_page["downloaded_images"] = [
                 r for r in image_results if not r["skipped"]
             ]
 
-            # ── Save JSON ─────────────────────────────────────────────────
             with open(raw_output_path, "w", encoding="utf-8") as f:
                 json.dump(parsed_page, f, ensure_ascii=False, indent=2)
 
-            # ── Write Markdown ────────────────────────────────────────────
             write_page_markdown(parsed_page)
 
-            success += 1
-            logger.debug(f"OK: [{page_id}] {title}")
+            with _lock:
+                _stats["success"] += 1
+            logger.debug(f"OK: [{pid}] {title}")
+            return "ok"
 
         except Exception as exc:
-            logger.error(f"Error crawling [{page_id}] {title}: {exc}")
-            failed += 1
+            logger.error(f"Error crawling [{pid}] {title}: {exc}")
+            with _lock:
+                _stats["failed"] += 1
+            return "fail"
+
+    page_source = (
+        client.iter_pages_from_root(root_page_id)
+        if root_page_id
+        else client.iter_all_pages()
+    )
+
+    # Stream pages from the API and submit to the worker pool as they arrive.
+    # Workers start processing immediately while the API is still being fetched.
+    futures: list = []
+    with ThreadPoolExecutor(max_workers=config.CRAWL_WORKERS) as pool:
+        with tqdm(desc="Fetching pages", unit="page", dynamic_ncols=True) as pbar_fetch:
+            for page_meta in page_source:
+                futures.append(pool.submit(_process_page, page_meta))
+                pbar_fetch.update(1)
+
+        # All pages submitted; total is now known, so tqdm can show ETA
+        for _f in tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc="Processing  ",
+            unit="page",
+            dynamic_ncols=True,
+        ):
+            try:
+                _f.result()
+            except Exception as exc:
+                logger.error(f"Worker error: {exc}")
 
     logger.info("=== CRAWL RESULT ===")
-    logger.info(f"  Success  : {success}")
-    logger.info(f"  Failed   : {failed}")
-    logger.info(f"  Skipped  : {skipped} (already processed)")
+    logger.info(f"  Success  : {_stats['success']}")
+    logger.info(f"  Failed   : {_stats['failed']}")
+    logger.info(f"  Skipped  : {_stats['skipped']} (unchanged since last crawl)")
     logger.info(f"  HTML     : {config.RAW_HTML_DIR}")
     logger.info(f"  JSON     : {config.RAW_DIR}")
     logger.info(f"  Markdown : {config.PAGES_MD_DIR}")

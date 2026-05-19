@@ -42,10 +42,12 @@ for _dir in [RAW_DIR, RAW_HTML_DIR, IMAGES_DIR, CHROMA_DIR, PAGES_MD_DIR]:
 # ---------------------------------------------------------------------------
 # Crawl settings
 # ---------------------------------------------------------------------------
-MAX_PAGES: int = int(os.getenv("MAX_PAGES", "0"))  # 0 = no limit
-REQUEST_RETRIES: int = 3
-REQUEST_TIMEOUT: int = 30
-REQUEST_DELAY: float = 0.5
+MAX_PAGES: int        = int(os.getenv("MAX_PAGES", "0"))            # 0 = no limit
+REQUEST_RETRIES: int  = 3
+REQUEST_TIMEOUT: int  = 30
+REQUEST_DELAY: float  = float(os.getenv("REQUEST_DELAY", "0.2"))    # seconds between API batches
+CRAWL_BATCH_SIZE: int = int(os.getenv("CRAWL_BATCH_SIZE", "100"))   # pages per API request (max 100)
+CRAWL_WORKERS: int    = int(os.getenv("CRAWL_WORKERS", "4"))        # parallel per-page processing threads
 
 # ---------------------------------------------------------------------------
 # Embedding settings
