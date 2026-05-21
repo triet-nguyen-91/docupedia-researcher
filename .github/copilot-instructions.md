@@ -1,11 +1,11 @@
 # BBM Docupedia RAG Pipeline — Workspace Instructions
 
-This project is a Python RAG (Retrieval-Augmented Generation) pipeline that crawls an internal Bosch Confluence space (Docupedia), stores content in ChromaDB, and exposes it to GitHub Copilot via a local MCP server.
+This project is a Python RAG (Retrieval-Augmented Generation) pipeline that crawls internal Bosch Confluence spaces (Docupedia), stores content in ChromaDB, and exposes it to GitHub Copilot via a local MCP server.
 
 ## Key conventions
 
 - All configuration (paths, credentials, model settings) is centralised in `config.py`. Every module imports from `config` — never hardcode paths or credentials anywhere else.
-- `.env` holds secrets (`DOCUPEDIA_PAT`, `DOCUPEDIA_BASE_URL`, `SPACE_KEY`). Never commit `.env`.
+- `.env` holds secrets and runtime settings (`DOCUPEDIA_PAT`, `DOCUPEDIA_BASE_URL`, `SPACE_KEY`, `SPACE_TARGET`). Never commit `.env`.
 - Authentication uses a PAT Bearer token set automatically on every Confluence API request at construction time. No explicit login call is needed anywhere.
 - The virtual environment is `.venv/`. Always activate it before running commands.
 - PX Proxy (`http://127.0.0.1:3128`) is required for `pip install` and Confluence API requests.
@@ -22,7 +22,7 @@ This project is a Python RAG (Retrieval-Augmented Generation) pipeline that craw
 | `processor/markdown_writer.py` | Writes `<pageid>_<title>.md` to `data/docupedia_data_page/` with YAML frontmatter |
 | `embedder/embedding_model.py` | Lazy-loads `intfloat/multilingual-e5-base`; applies `passage:`/`query:` prefixes |
 | `embedder/chroma_store.py` | `upsert_chunks()` (idempotent) and `query()` against local ChromaDB persistent store |
-| `mcp_server/server.py` | FastMCP stdio server — exposes `search_docs`, `get_page`, `list_pages` to Copilot |
+| `mcp_server/server.py` | FastMCP stdio server — exposes `search_docs`, `get_page`, `list_pages` to Copilot across one, many, or all indexed spaces |
 | `pipeline.py` | CLI entry point: `crawl`, `embed`, `run` subcommands |
 
 ## Data layout
@@ -43,9 +43,10 @@ data/chroma_db/                                           ← ChromaDB vector st
 # Activate venv first
 .venv\Scripts\Activate.ps1
 
-python pipeline.py crawl          # fetch pages → save HTML + JSON + Markdown
-python pipeline.py embed          # chunk + embed → ChromaDB
-python pipeline.py run            # crawl + embed in one shot
+python pipeline.py crawl            # fetch pages → save HTML + JSON + Markdown
+python pipeline.py embed            # chunk + embed → ChromaDB
+python pipeline.py sync-metadata    # backfill searchable space metadata for old chunks
+python pipeline.py run              # crawl + embed in one shot
 python pipeline.py crawl --limit 5  # test with 5 pages only
 
 # MCP server (VS Code starts this automatically via .vscode/mcp.json)

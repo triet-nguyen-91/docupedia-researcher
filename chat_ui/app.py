@@ -42,7 +42,11 @@ except ImportError:
 # Load .env (config.py already does this, but we import it here to trigger
 # TRANSFORMERS_OFFLINE and HF_DATASETS_OFFLINE before sentence-transformers loads)
 import config  # noqa: F401 — side-effects: sets env vars, loads .env
-from embedder.chroma_store import query as chroma_query, get_collection_stats
+from embedder.chroma_store import (
+    get_collection_stats,
+    get_missing_indexed_spaces,
+    query as chroma_query,
+)
 
 # ---------------------------------------------------------------------------
 # Runtime configuration (read at startup, not per-message)
@@ -216,12 +220,22 @@ async def on_chat_start() -> None:
     cl.user_session.set("history", [])
     stats = get_collection_stats()
     count = stats.get("count", 0)
+    missing_targets = get_missing_indexed_spaces(config.SPACE_TARGETS)
+    missing_note = ""
+    if missing_targets:
+        missing_note = (
+            "\n"
+            f"Missing metadata sync: **{', '.join(missing_targets)}**  \n"
+            "Run `python pipeline.py sync-metadata` once with `SPACE_KEY` set to each listed space."
+        )
     await cl.Message(
         content=(
             f"**Docupedia Chat** is ready.  \n"
             f"Knowledge base: **{count:,}** indexed chunks  \n"
+            f"Search scope: **{config.get_search_scope_label()}**  \n"
             f"Model: **{_OLLAMA_MODEL}**  \n"
-            f"Retrieval: top **{_TOP_K}** from **{_SEARCH_K}** candidates\n\n"
+            f"Retrieval: top **{_TOP_K}** from **{_SEARCH_K}** candidates"
+            f"{missing_note}\n\n"
             "Ask me anything about your Docupedia content!"
         )
     ).send()
@@ -235,7 +249,11 @@ async def on_message(message: cl.Message) -> None:
         return
 
     # --- Retrieve relevant chunks from ChromaDB ---
-    retrieved = chroma_query(user_query, n_results=_SEARCH_K)
+    retrieved = chroma_query(
+        user_query,
+        n_results=_SEARCH_K,
+        space_keys=config.SPACE_TARGETS or None,
+    )
     chunks = _select_context_chunks(
         user_query,
         [

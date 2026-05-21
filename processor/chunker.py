@@ -10,6 +10,7 @@ Each resulting chunk is a dict:
     "id":       "<pageid>-<chunk_index>",   # unique ID for ChromaDB
     "text":     str,                         # chunk body (with section context)
     "metadata": {
+        "space_key":    str,
         "page_id":      int,
         "title":        str,
         "url":          str,
@@ -76,6 +77,7 @@ def chunk_page(parsed_page: dict) -> list[dict]:
                 "id": f"{pageid}-{chunk_index}",
                 "text": split,
                 "metadata": {
+                    "space_key": config.SPACE_KEY,
                     "page_id": pageid,
                     "title": title,
                     "url": url,

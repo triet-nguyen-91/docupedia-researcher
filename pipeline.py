@@ -40,7 +40,12 @@ from crawler.page_parser import parse_page
 from crawler.image_downloader import download_page_images
 from processor.markdown_writer import write_page_markdown
 from processor.chunker import chunk_page
-from embedder.chroma_store import upsert_chunks, get_collection_stats
+from embedder.chroma_store import (
+    get_collection_stats,
+    has_indexed_space,
+    update_chunk_metadatas,
+    upsert_chunks,
+)
 
 
 def _safe_title(title: str) -> str:
@@ -238,6 +243,48 @@ def run_embed() -> None:
     logger.info(f"  ChromaDB chunks : {stats['count']}")
 
 
+def run_sync_metadata() -> None:
+    """
+    Update chunk metadata in ChromaDB without recomputing embeddings.
+
+    Useful after metadata schema changes, for example when adding ``space_key``
+    to existing chunks so search can be restricted to the active Docupedia space.
+    """
+    logger.info("=== STEP 2: SYNC METADATA ===")
+    logger.info(f"Space Key       : {config.SPACE_KEY}")
+    logger.info(f"JSON source dir : {config.RAW_DIR}")
+    logger.info(f"ChromaDB dir    : {config.CHROMA_DIR}")
+
+    json_files = sorted(config.RAW_DIR.glob("*.json"))
+    if not json_files:
+        logger.warning(f"No JSON files found in {config.RAW_DIR}. Run 'crawl' first.")
+        return
+
+    logger.info(f"Pages to sync: {len(json_files)}")
+
+    success = 0
+    failed = 0
+
+    for json_file in tqdm(json_files, desc="Sync metadata", unit="page"):
+        try:
+            with open(json_file, encoding="utf-8") as f:
+                parsed_page = json.load(f)
+
+            chunks = chunk_page(parsed_page)
+            if chunks:
+                update_chunk_metadatas(chunks)
+            success += 1
+
+        except Exception as exc:
+            logger.error(f"Metadata sync error {json_file.name}: {exc}")
+            failed += 1
+
+    logger.info("=== METADATA SYNC RESULT ===")
+    logger.info(f"  Success             : {success}")
+    logger.info(f"  Failed              : {failed}")
+    logger.info(f"  Space filter active : {has_indexed_space(config.SPACE_KEY)}")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -272,6 +319,12 @@ Examples:
     # ── embed ──────────────────────────────────────────────────────────────
     subparsers.add_parser("embed", help="Chunk + embed saved JSON into ChromaDB")
 
+    # ── sync-metadata ──────────────────────────────────────────────────────
+    subparsers.add_parser(
+        "sync-metadata",
+        help="Update Chroma metadata from saved JSON without recomputing embeddings",
+    )
+
     # ── run (all) ──────────────────────────────────────────────────────────
     run_parser = subparsers.add_parser("run", help="Full pipeline: crawl → embed")
     run_parser.add_argument(
@@ -289,6 +342,8 @@ Examples:
         run_crawl(limit=args.limit, page_id=args.page_id)
     elif args.command == "embed":
         run_embed()
+    elif args.command == "sync-metadata":
+        run_sync_metadata()
     elif args.command == "run":
         run_crawl(limit=getattr(args, "limit", 0), page_id=getattr(args, "page_id", None))
         run_embed()

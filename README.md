@@ -36,7 +36,7 @@ BBM_Docupedia/
 ├── .github/
 │   ├── copilot-instructions.md    # Workspace-wide Copilot context
 │   └── agents/
-│       └── docupedia.agent.md     # @Docupedia custom chat agent definition
+│       └── docupedia.agent.md     # Ask Docupedia custom chat agent definition
 │
 └── docs/
     └── docupedia_rag_decisions.md # Architecture decision log
@@ -88,7 +88,7 @@ Confluence API (PAT auth)
   chroma_store.py ──── data/chroma_db/
         │
         ▼
-  mcp_server/server.py ──── GitHub Copilot @Docupedia agent
+      mcp_server/server.py ──── GitHub Copilot Ask Docupedia agent
 ```
 
 **Authentication:** PAT is read from `.env` and sent automatically as a `Bearer` token on every Confluence API request. No explicit login step is required.
@@ -147,8 +147,13 @@ DOCUPEDIA_PAT=your_personal_access_token_here
 # Base URL of your Confluence instance (no trailing slash)
 DOCUPEDIA_BASE_URL=https://inside-docupedia.bosch.com/confluence2
 
-# Confluence space key to crawl (e.g. BBM, ~username, TEAM)
+# Confluence space key to crawl and store under data/.../<SPACE_KEY>/
 SPACE_KEY=YOUR_SPACE_KEY
+
+# Optional: search scope for Copilot MCP and Chat UI retrieval.
+# Leave empty to search all indexed spaces.
+# Set one or more comma-separated space keys to restrict search results.
+SPACE_TARGET=
 
 # Max pages to crawl — set to 0 to crawl ALL pages in the space
 MAX_PAGES=0
@@ -234,11 +239,30 @@ To add a second space to the same knowledge base:
 
 Confluence page IDs are globally unique across all spaces, so there is no risk of ID collision.
 
+### Controlling search scope with `SPACE_TARGET`
+
+`SPACE_KEY` controls which space is crawled and where files are written locally. `SPACE_TARGET` controls which spaces are searched by the MCP server and the optional Chat UI.
+
+Examples:
+
+```env
+# Search every indexed space
+SPACE_TARGET=
+
+# Search one space only
+SPACE_TARGET=BBMRL
+
+# Search multiple spaces only
+SPACE_TARGET=BBMRL,BBMDATAARCHITECTURE
+```
+
+If you are upgrading from an older index that was created before `space_key` metadata existed, run `python pipeline.py sync-metadata` once for each previously crawled `SPACE_KEY` so targeted search can filter correctly.
+
 ---
 
 ## GitHub Copilot Agent
 
-Once the pipeline has been run at least once, the `@Docupedia` agent is available in VS Code Copilot Chat.
+Once the pipeline has been run at least once, the **Ask Docupedia** agent is available in VS Code Copilot Chat.
 
 VS Code automatically starts the MCP server in the background when the workspace opens (configured in `.vscode/mcp.json`). No manual setup needed.
 
@@ -252,11 +276,11 @@ VS Code automatically starts the MCP server in the background when the workspace
 
 ### Usage
 
-In VS Code Copilot Chat, select **Docupedia** from the agent picker:
+In VS Code Copilot Chat, select **Ask Docupedia** from the agent picker, then ask your question:
 
 ```
-@Docupedia What is the BBM Data Architecture?
-@Docupedia List all pages about data governance
+What is the BBM Data Architecture?
+List all pages about data governance
 ```
 
 The agent answers **only** from crawled Docupedia content and always cites page titles and URLs. Queries in Vietnamese, English, or German are all supported.
@@ -265,7 +289,7 @@ The agent answers **only** from crawled Docupedia content and always cites page 
 
 ## Optional: Chat UI (Chainlit + Ollama)
 
-The default way to query the knowledge base is via the **GitHub Copilot `@Docupedia` agent** (see above). No extra setup is needed for that.
+The default way to query the knowledge base is via the **GitHub Copilot Ask Docupedia agent** (see above). No extra setup is needed for that.
 
 If you want a **standalone browser-based chat UI** instead, you can use the optional Chainlit + Ollama integration. This is completely independent of VS Code and GitHub Copilot.
 
