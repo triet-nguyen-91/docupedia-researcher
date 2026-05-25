@@ -157,14 +157,27 @@ def _build_context(chunks: list[dict]) -> tuple[str, dict[int, tuple[str, str]]]
         section = str(meta.get("section", title))
         url = str(meta.get("url", ""))
         distance = float(chunk.get("distance", 1.0))
+        chunk_type = str(meta.get("type", "text"))
 
-        context_parts.append(
-            f"[{index}] Page: {title}\n"
-            f"Section: {section}\n"
-            f"URL: {url or 'N/A'}\n"
-            f"Similarity distance: {distance:.3f}\n"
-            f"Content:\n{text}"
-        )
+        if chunk_type == "image_ocr":
+            filename = meta.get("filename", "")
+            kind = meta.get("kind", "")
+            context_parts.append(
+                f"[{index}] Page: {title}\n"
+                f"Section: {section}\n"
+                f"Image: {filename}{' (' + kind + ')' if kind else ''}\n"
+                f"URL: {url or 'N/A'}\n"
+                f"Similarity distance: {distance:.3f}\n"
+                f"Content (extracted from image via OCR):\n{text}"
+            )
+        else:
+            context_parts.append(
+                f"[{index}] Page: {title}\n"
+                f"Section: {section}\n"
+                f"URL: {url or 'N/A'}\n"
+                f"Similarity distance: {distance:.3f}\n"
+                f"Content:\n{text}"
+            )
         source_map[index] = (title, url)
 
     return "\n\n---\n\n".join(context_parts), source_map
@@ -197,6 +210,26 @@ def _ollama_options() -> dict[str, float | int]:
         "num_ctx": _OLLAMA_NUM_CTX,
         "num_predict": _OLLAMA_NUM_PREDICT,
     }
+
+
+def _collect_image_elements(chunks: list[dict]) -> list["cl.Image"]:
+    """Return Chainlit Image elements for image_ocr chunks with valid local files."""
+    seen: set[str] = set()
+    elements: list[cl.Image] = []
+    for chunk in chunks:
+        meta = chunk.get("metadata", {})
+        if meta.get("type") != "image_ocr":
+            continue
+        local_path = meta.get("local_path", "")
+        if not local_path or local_path in seen:
+            continue
+        p = Path(local_path)
+        if not p.is_file():
+            continue
+        seen.add(local_path)
+        filename = meta.get("filename") or p.name
+        elements.append(cl.Image(path=str(p), name=filename, display="inline"))
+    return elements
 
 
 def _format_sources(source_map: dict[int, tuple[str, str]]) -> str:
@@ -268,8 +301,9 @@ async def on_message(message: cl.Message) -> None:
         ).send()
         return
 
-    # --- Build context block ---
+    # --- Build context block and collect inline images ---
     context_block, source_map = _build_context(chunks)
+    image_elements = _collect_image_elements(chunks)
 
     # --- Compose messages for Ollama ---
     messages = [
@@ -320,6 +354,10 @@ async def on_message(message: cl.Message) -> None:
     # --- Append source citations ---
     if source_map:
         await response_msg.stream_token(_format_sources(source_map))
+
+    # --- Attach relevant images inline ---
+    if image_elements:
+        response_msg.elements = image_elements
 
     await response_msg.update()
     _append_history(user_query, "".join(answer_parts))
