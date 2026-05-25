@@ -129,3 +129,45 @@ CHROMA_COLLECTION_NAME: str = "docupedia"
 # ---------------------------------------------------------------------------
 CHUNK_SIZE: int = 512        # tokens per chunk
 CHUNK_OVERLAP: int = 64      # token overlap between adjacent chunks
+
+# ---------------------------------------------------------------------------
+# OCR / Image-indexing settings
+# ---------------------------------------------------------------------------
+# Master switch for the OCR pipeline stage. When False, `python pipeline.py ocr`
+# becomes a no-op and `run` skips the OCR step.
+OCR_ENABLED: bool = os.getenv("OCR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+# Tesseract language pack(s). Multiple languages can be combined with '+',
+# e.g. "eng+deu". Default targets English with German fallback.
+OCR_LANGS: str = os.getenv("OCR_LANGS", "eng+deu").strip() or "eng+deu"
+
+# Optional explicit path to the Tesseract binary (Windows installers do not
+# always add it to PATH). Leave empty to use the system PATH.
+TESSERACT_CMD: str = os.getenv("TESSERACT_CMD", "").strip()
+
+# Parallel OCR worker threads per page. Tesseract releases the GIL, so a small
+# pool helps; oversubscribing hurts because each instance is CPU-bound.
+OCR_WORKERS: int = int(os.getenv("OCR_WORKERS", "2"))
+
+# Filter thresholds — drop images cheaply before opening the file when possible.
+OCR_MIN_WIDTH: int  = int(os.getenv("OCR_MIN_WIDTH",  "64"))
+OCR_MIN_HEIGHT: int = int(os.getenv("OCR_MIN_HEIGHT", "64"))
+OCR_MIN_BYTES: int  = int(os.getenv("OCR_MIN_BYTES",  "2048"))
+OCR_MAX_PIXELS: int = int(os.getenv("OCR_MAX_PIXELS", "30000000"))   # 30 MP
+OCR_MAX_RATIO: float = float(os.getenv("OCR_MAX_RATIO", "30.0"))      # extreme aspect ratio guard
+OCR_PER_PAGE_LIMIT: int = int(os.getenv("OCR_PER_PAGE_LIMIT", "30"))
+
+# Comma-separated filename substrings that mark an image as decorative.
+# Matching is case-insensitive and substring-based.
+_DEFAULT_OCR_BLOCKLIST = "externallink,icon_,spacer,bullet_,arrow_,loading,divider"
+OCR_BLOCKLIST_PATTERNS: tuple[str, ...] = tuple(
+    pat.strip().lower()
+    for pat in os.getenv("OCR_BLOCKLIST_PATTERNS", _DEFAULT_OCR_BLOCKLIST).split(",")
+    if pat.strip()
+)
+
+# Routing thresholds used to decide ocr-good / ocr-partial / ocr-empty.
+OCR_GOOD_WORDS: int   = int(os.getenv("OCR_GOOD_WORDS", "20"))
+OCR_GOOD_CONF: float  = float(os.getenv("OCR_GOOD_CONF", "70"))
+OCR_PARTIAL_WORDS: int  = int(os.getenv("OCR_PARTIAL_WORDS", "5"))
+OCR_PARTIAL_CONF: float = float(os.getenv("OCR_PARTIAL_CONF", "40"))

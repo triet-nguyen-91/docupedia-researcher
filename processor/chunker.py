@@ -89,5 +89,72 @@ def chunk_page(parsed_page: dict) -> list[dict]:
             })
             chunk_index += 1
 
-    logger.debug(f"Chunked page [{pageid}] '{title}': {chunk_index} chunks")
+    # Image OCR chunks share the collection but live in their own ID namespace
+    # so we never collide with text chunk IDs.
+    chunks.extend(_image_ocr_chunks(parsed_page))
+
+    logger.debug(f"Chunked page [{pageid}] '{title}': {len(chunks)} chunks total")
+    return chunks
+
+
+def _image_ocr_chunks(parsed_page: dict) -> list[dict]:
+    """Build ``type=image_ocr`` chunks from the page's ``images_index``."""
+    images_index = parsed_page.get("images_index") or []
+    if not images_index:
+        return []
+
+    pageid = parsed_page["pageid"]
+    title = parsed_page["title"]
+    url = parsed_page.get("url", "")
+    last_modified = parsed_page.get("last_modified", "")
+
+    chunks: list[dict] = []
+
+    for image in images_index:
+        ocr_text = (image.get("ocr_text") or "").strip()
+        if not image.get("is_indexable") or not ocr_text:
+            continue
+
+        heading = image.get("section") or title
+        filename = image.get("filename") or ""
+        alt = (image.get("alt_text") or "").strip()
+        caption = (image.get("caption_dom") or "").strip()
+
+        prelude_parts: list[str] = [f"{heading}"]
+        if filename:
+            prelude_parts.append(f"Image: {filename}")
+        if alt:
+            prelude_parts.append(f"Alt: {alt}")
+        if caption:
+            prelude_parts.append(f"Caption: {caption}")
+        prelude = "\n".join(prelude_parts)
+
+        full_text = f"{prelude}\n\nOCR:\n{ocr_text}"
+        splits = _splitter.split_text(full_text)
+
+        for k, split in enumerate(splits):
+            text_value = split.strip()
+            if not text_value:
+                continue
+            chunks.append({
+                "id": f"{pageid}-img-{image.get('order', 0)}-ocr-{k}",
+                "text": text_value,
+                "metadata": {
+                    "space_key": image.get("space_key") or config.SPACE_KEY,
+                    "page_id": pageid,
+                    "title": title,
+                    "url": url,
+                    "section": heading,
+                    "type": "image_ocr",
+                    "image_id": image.get("image_id", ""),
+                    "filename": filename,
+                    "local_path": image.get("local_path", ""),
+                    "kind": image.get("kind", "unknown"),
+                    "ocr_confidence": float(image.get("ocr_confidence") or 0.0),
+                    "ocr_lang": image.get("ocr_lang") or config.OCR_LANGS,
+                    "chunk_index": k,
+                    "last_modified": last_modified,
+                },
+            })
+
     return chunks

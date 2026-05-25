@@ -5,8 +5,11 @@ Commands:
   python pipeline.py crawl              → Crawl all pages: fetch HTML from Confluence,
                                           download attachments, save offline HTML + JSON + Markdown
   python pipeline.py crawl --limit 5   → Test with 5 pages
+  python pipeline.py ocr                → Build images_index + OCR (between crawl and embed)
+  python pipeline.py ocr --force        → Re-OCR even if ocr_text already exists
   python pipeline.py embed              → Read saved JSON, chunk and embed into ChromaDB
-  python pipeline.py run                → crawl + embed in one shot
+  python pipeline.py run                → crawl + ocr + embed in one shot
+  python pipeline.py run --no-ocr       → crawl + embed only (skip OCR)
 
 Authentication:
   PAT (Personal Access Token) is read from .env and sent automatically as a
@@ -14,7 +17,7 @@ Authentication:
 
 Data layout:
   data/raw_html/<pageid>.html                    → Raw offline HTML (attachment URLs rewritten to local)
-  data/raw/<pageid>_<title>.json                 → Structured JSON (sections + metadata)
+  data/raw/<pageid>_<title>.json                 → Structured JSON (sections + images_index + metadata)
   data/images/<pageid>/                          → Downloaded page attachments
   docupedia_data_page/<pageid>_<title>.md → Markdown export
   data/chroma_db/                         → ChromaDB vector store
@@ -40,6 +43,7 @@ from crawler.page_parser import parse_page
 from crawler.image_downloader import download_page_images
 from processor.markdown_writer import write_page_markdown
 from processor.chunker import chunk_page
+from processor.ocr import run_ocr_for_page
 from embedder.chroma_store import (
     get_collection_stats,
     has_indexed_space,
@@ -198,6 +202,86 @@ def run_crawl(limit: int = 0, page_id: int | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 1.5: OCR — populate images_index in saved JSON
+# ---------------------------------------------------------------------------
+
+def run_ocr(page_id: int | None = None, limit: int = 0, force: bool = False) -> None:
+    """
+    For each page JSON under ``data/raw/<SPACE_KEY>/``, build the
+    ``images_index`` from the offline HTML and run tesseract OCR on indexable
+    images. Updates each JSON file in place.
+
+    Idempotent: by default we skip images that already have ``ocr_text``.
+    Pass ``force=True`` to re-OCR everything.
+    """
+    if not config.OCR_ENABLED:
+        logger.info("OCR_ENABLED=false in .env — skipping OCR stage.")
+        return
+
+    logger.info("=== STEP 1.5: OCR ===")
+    logger.info(f"Space Key   : {config.SPACE_KEY}")
+    logger.info(f"JSON dir    : {config.RAW_DIR}")
+    logger.info(f"HTML dir    : {config.RAW_HTML_DIR}")
+    logger.info(f"Languages   : {config.OCR_LANGS}")
+    logger.info(f"Workers     : {config.OCR_WORKERS}")
+    logger.info(f"Force re-OCR: {force}")
+
+    json_files = sorted(config.RAW_DIR.glob("*.json"))
+    if page_id is not None:
+        matches = [p for p in json_files if p.stem.startswith(f"{page_id}_")]
+        json_files = matches
+    if limit > 0:
+        json_files = json_files[:limit]
+
+    if not json_files:
+        logger.warning("No matching JSON files found — run 'crawl' first.")
+        return
+
+    totals = {
+        "pages": 0,
+        "total_images": 0,
+        "skipped_filter": 0,
+        "ocr_good": 0,
+        "ocr_partial": 0,
+        "ocr_empty": 0,
+        "ocr_error": 0,
+        "skipped_existing": 0,
+    }
+
+    for json_file in tqdm(json_files, desc="OCR", unit="page"):
+        try:
+            with open(json_file, encoding="utf-8") as f:
+                parsed_page = json.load(f)
+
+            images_index, summary = run_ocr_for_page(parsed_page, force=force)
+            parsed_page["images_index"] = images_index
+
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(parsed_page, f, ensure_ascii=False, indent=2)
+
+            totals["pages"] += 1
+            for key in (
+                "total", "skipped_filter", "ocr_good", "ocr_partial",
+                "ocr_empty", "ocr_error", "skipped_existing",
+            ):
+                totals_key = "total_images" if key == "total" else key
+                totals[totals_key] += summary.get(key, 0)
+
+        except Exception as exc:
+            logger.error(f"OCR error {json_file.name}: {exc}")
+
+    logger.info("=== OCR RESULT ===")
+    logger.info(f"  Pages processed   : {totals['pages']}")
+    logger.info(f"  Images total      : {totals['total_images']}")
+    logger.info(f"  Skipped by filter : {totals['skipped_filter']}")
+    logger.info(f"  Skipped existing  : {totals['skipped_existing']}")
+    logger.info(f"  OCR good          : {totals['ocr_good']}")
+    logger.info(f"  OCR partial       : {totals['ocr_partial']}")
+    logger.info(f"  OCR empty         : {totals['ocr_empty']}")
+    logger.info(f"  OCR error         : {totals['ocr_error']}")
+
+
+# ---------------------------------------------------------------------------
 # Step 2: Embed
 # ---------------------------------------------------------------------------
 
@@ -298,9 +382,13 @@ Examples:
   python pipeline.py crawl                        # Crawl entire space
   python pipeline.py crawl --limit 5             # Test with 5 pages
   python pipeline.py crawl --page-id 2155921768  # Crawl a page subtree
+  python pipeline.py ocr                          # Build images_index + run OCR
+  python pipeline.py ocr --page-id 2155921768    # Re-OCR a single page
+  python pipeline.py ocr --force                  # Re-OCR everything
   python pipeline.py embed                        # Embed JSON → ChromaDB
-  python pipeline.py run                          # Crawl + Embed (full pipeline)
-  python pipeline.py run --page-id 2155921768    # Subtree crawl + embed
+  python pipeline.py run                          # Crawl + OCR + Embed (full pipeline)
+  python pipeline.py run --no-ocr                # Crawl + Embed (skip OCR)
+  python pipeline.py run --page-id 2155921768    # Subtree crawl + ocr + embed
 """,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -319,6 +407,24 @@ Examples:
     # ── embed ──────────────────────────────────────────────────────────────
     subparsers.add_parser("embed", help="Chunk + embed saved JSON into ChromaDB")
 
+    # ── ocr ────────────────────────────────────────────────────────────────
+    ocr_parser = subparsers.add_parser(
+        "ocr",
+        help="Build images_index and run OCR on saved pages (between crawl and embed)",
+    )
+    ocr_parser.add_argument(
+        "--limit", type=int, default=0,
+        help="Max pages to OCR (0 = no limit)",
+    )
+    ocr_parser.add_argument(
+        "--page-id", type=int, default=None, dest="page_id",
+        help="Only OCR the single page with this Confluence ID",
+    )
+    ocr_parser.add_argument(
+        "--force", action="store_true",
+        help="Re-OCR images that already have ocr_text",
+    )
+
     # ── sync-metadata ──────────────────────────────────────────────────────
     subparsers.add_parser(
         "sync-metadata",
@@ -326,7 +432,7 @@ Examples:
     )
 
     # ── run (all) ──────────────────────────────────────────────────────────
-    run_parser = subparsers.add_parser("run", help="Full pipeline: crawl → embed")
+    run_parser = subparsers.add_parser("run", help="Full pipeline: crawl → ocr → embed")
     run_parser.add_argument(
         "--limit", type=int, default=0,
         help="Max pages to crawl (0 = no limit)",
@@ -335,6 +441,10 @@ Examples:
         "--page-id", type=int, default=None, dest="page_id",
         help="Root page ID — crawl this page and all its sub-pages (overrides PAGE_ID in .env)",
     )
+    run_parser.add_argument(
+        "--no-ocr", action="store_true",
+        help="Skip the OCR stage even when OCR_ENABLED=true",
+    )
 
     args = parser.parse_args()
 
@@ -342,10 +452,14 @@ Examples:
         run_crawl(limit=args.limit, page_id=args.page_id)
     elif args.command == "embed":
         run_embed()
+    elif args.command == "ocr":
+        run_ocr(page_id=args.page_id, limit=args.limit, force=args.force)
     elif args.command == "sync-metadata":
         run_sync_metadata()
     elif args.command == "run":
         run_crawl(limit=getattr(args, "limit", 0), page_id=getattr(args, "page_id", None))
+        if not getattr(args, "no_ocr", False):
+            run_ocr(page_id=getattr(args, "page_id", None))
         run_embed()
 
 
