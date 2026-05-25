@@ -61,18 +61,60 @@ Then copy `data/models/` and set:
 EMBEDDING_MODEL=data/models/multilingual-e5-base
 ```
 
-## 5. Run The Pipeline
+## 5. Optional: Install Tesseract OCR (Image Indexing)
 
-Full run:
+The `ocr` pipeline stage indexes image content from Confluence pages by running Tesseract over locally downloaded attachments. Skip this step entirely if you do not need image-level search.
+
+### Install Tesseract binary
+
+**Windows** — Download and run the [UB-Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki), then add the install folder to `PATH` (e.g. `C:\Program Files\Tesseract-OCR`).
+
+**Linux**:
+```bash
+sudo apt-get install tesseract-ocr tesseract-ocr-deu
+```
+
+Verify:
+```powershell
+tesseract --version
+```
+
+### Language packs
+
+The default languages are `eng+deu`. Install the German `deu` pack if it is not bundled with the installer. On Linux:
+
+```bash
+sudo apt-get install tesseract-ocr-deu
+```
+
+### `.env` knobs
+
+```env
+OCR_ENABLED=true          # set to false to disable without removing Tesseract
+OCR_LANGS=eng+deu         # Tesseract language string
+# TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe  # override if not on PATH
+OCR_WORKERS=2             # parallel OCR threads
+```
+
+## 6. Run The Pipeline
+
+Full run (crawl → ocr → embed):
 
 ```powershell
 python pipeline.py run
+```
+
+Skip OCR:
+
+```powershell
+python pipeline.py run --no-ocr
 ```
 
 Step by step:
 
 ```powershell
 python pipeline.py crawl
+python pipeline.py ocr          # build images_index + run OCR
 python pipeline.py embed
 ```
 
@@ -82,7 +124,7 @@ Test run:
 python pipeline.py crawl --limit 5
 ```
 
-## 6. Crawl A Specific Root Page
+## 7. Crawl A Specific Root Page
 
 Via `.env`:
 
@@ -97,7 +139,7 @@ python pipeline.py crawl --page-id 2155921768
 python pipeline.py run --page-id 2155921768
 ```
 
-## 7. Multiple Spaces
+## 8. Multiple Spaces
 
 To add another space into the same ChromaDB:
 
@@ -105,7 +147,7 @@ To add another space into the same ChromaDB:
 2. Run `python pipeline.py run` again.
 3. Adjust `SPACE_TARGET` if you want to limit retrieval to selected spaces.
 
-## 8. Search Scope
+## 9. Search Scope
 
 Examples:
 
@@ -123,7 +165,7 @@ python pipeline.py sync-metadata
 
 Run that once per previously indexed `SPACE_KEY`.
 
-## 9. GitHub Copilot MCP Usage
+## 10. GitHub Copilot MCP Usage
 
 After at least one successful pipeline run, the Ask Docupedia agent can query the indexed knowledge base.
 
